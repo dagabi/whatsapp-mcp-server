@@ -1,0 +1,35 @@
+{
+  "name": "whatsapp-mcp-readonly",
+  "version": "0.1.0",
+  "description": "Read-only MCP server for searching/reading WhatsApp message history via Baileys. No send/delete/edit capability exists in this codebase.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "daemon": "node dist/daemon/index.js",
+    "mcp": "node dist/mcp/index.js",
+    "dev:daemon": "tsx src/daemon/index.ts",
+    "dev:mcp": "tsx src/mcp/index.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@hapi/boom": "^10.0.1",
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "baileys": "^6.7.24",
+    "better-sqlite3": "^11.10.0",
+    "pino": "^9.6.0",
+    "qrcode-terminal": "^0.12.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/node": "^22.10.5",
+    "@types/qrcode-terminal": "^0.12.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}
