@@ -29,3 +29,23 @@ export const IPC_MODE: "unix" | "tcp" =
   process.env.WHATSAPP_MCP_IPC_MODE === "tcp" ? "tcp" : "unix";
 export const IPC_TCP_HOST = process.env.WHATSAPP_MCP_DAEMON_HOST ?? "127.0.0.1";
 export const IPC_TCP_PORT = Number(process.env.WHATSAPP_MCP_DAEMON_PORT ?? 8787);
+
+/**
+ * Transport between an MCP client and this MCP server.
+ *
+ * "stdio" (default): same-container deployment — the client spawns this
+ * process as a local child process and talks over stdin/stdout. No change
+ * from prior behavior.
+ *
+ * "http": the MCP server runs in its own container, separate from the
+ * agent/client container, and is reached over a network port instead of
+ * being spawned locally. Every request on this port MUST present a valid
+ * `Authorization: Bearer <WHATSAPP_MCP_HTTP_TOKEN>` header — unlike a
+ * locally-spawned stdio process, a network port has no other access
+ * control, and the five tools behind it can read the owner's entire
+ * WhatsApp message history (still read-only, but still private data).
+ */
+export const MCP_TRANSPORT: "stdio" | "http" =
+  process.env.WHATSAPP_MCP_TRANSPORT === "http" ? "http" : "stdio";
+export const MCP_HTTP_PORT = Number(process.env.WHATSAPP_MCP_HTTP_PORT ?? 8788);
+export const MCP_HTTP_TOKEN = process.env.WHATSAPP_MCP_HTTP_TOKEN;
