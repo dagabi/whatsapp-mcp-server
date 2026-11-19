@@ -17,12 +17,27 @@ import {
   TOKEN_PATH,
   DAEMON_LOG_PATH,
   REPO_ROOT,
+  IPC_MODE,
+  IPC_TCP_HOST,
+  IPC_TCP_PORT,
 } from "../common/paths.js";
 import type { IpcMethod, IpcRequest, IpcResponse } from "../common/ipcProtocol.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
+function connectToDaemon(): net.Socket {
+  return IPC_MODE === "tcp"
+    ? net.createConnection(IPC_TCP_PORT, IPC_TCP_HOST)
+    : net.createConnection(SOCKET_PATH);
+}
+
 function readToken(): string | null {
+  // In "tcp" mode the daemon is a separate container/host — its token file
+  // isn't on this filesystem, so the token must be injected via env
+  // (set as the MCP server's `env` when registering this shim).
+  if (process.env.WHATSAPP_MCP_DAEMON_TOKEN) {
+    return process.env.WHATSAPP_MCP_DAEMON_TOKEN;
+  }
   try {
     return fs.readFileSync(TOKEN_PATH, "utf8").trim();
   } catch {
@@ -30,10 +45,10 @@ function readToken(): string | null {
   }
 }
 
-async function socketIsAlive(): Promise<boolean> {
-  if (!fs.existsSync(SOCKET_PATH)) return false;
+async function daemonIsAlive(): Promise<boolean> {
+  if (IPC_MODE === "unix" && !fs.existsSync(SOCKET_PATH)) return false;
   return new Promise((resolve) => {
-    const sock = net.createConnection(SOCKET_PATH);
+    const sock = connectToDaemon();
     sock.once("connect", () => {
       sock.end();
       resolve(true);
@@ -58,19 +73,29 @@ function spawnDaemon(): void {
   child.unref();
 }
 
-async function waitForSocket(timeoutMs: number): Promise<boolean> {
+async function waitForDaemon(timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (await socketIsAlive()) return true;
+    if (await daemonIsAlive()) return true;
     await new Promise((r) => setTimeout(r, 300));
   }
   return false;
 }
 
 export async function ensureDaemonRunning(): Promise<void> {
-  if (await socketIsAlive()) return;
+  if (await daemonIsAlive()) return;
+
+  if (IPC_MODE === "tcp") {
+    // The daemon lives in another container/host; we cannot spawn it here.
+    throw new Error(
+      `Cannot reach whatsapp-mcp daemon at tcp://${IPC_TCP_HOST}:${IPC_TCP_PORT}. ` +
+        "It runs in a separate container in this deployment mode — start it there, " +
+        "or check WHATSAPP_MCP_DAEMON_HOST/PORT."
+    );
+  }
+
   spawnDaemon();
-  const ok = await waitForSocket(15_000);
+  const ok = await waitForDaemon(15_000);
   if (!ok) {
     throw new Error(
       "Timed out waiting for whatsapp-mcp daemon to start. Check data/daemon.log."
@@ -89,7 +114,7 @@ export async function callDaemon<T = unknown>(
   }
 
   return new Promise<T>((resolve, reject) => {
-    const sock = net.createConnection(SOCKET_PATH);
+    const sock = connectToDaemon();
     const id = crypto.randomUUID();
     let buffer = "";
 

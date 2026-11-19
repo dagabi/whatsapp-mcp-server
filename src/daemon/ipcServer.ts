@@ -16,7 +16,14 @@
 import fs from "node:fs";
 import net from "node:net";
 import crypto from "node:crypto";
-import { SOCKET_PATH, TOKEN_PATH, DATA_DIR } from "../common/paths.js";
+import {
+  SOCKET_PATH,
+  TOKEN_PATH,
+  DATA_DIR,
+  IPC_MODE,
+  IPC_TCP_HOST,
+  IPC_TCP_PORT,
+} from "../common/paths.js";
 import type { IpcMethod, IpcRequest, IpcResponse } from "../common/ipcProtocol.js";
 import { getMessages, listChats, searchMessages, countChats, countMessages, db } from "./db.js";
 import type { WhatsAppClient } from "./whatsapp.js";
@@ -94,10 +101,6 @@ export function startIpcServer(wa: WhatsAppClient): net.Server {
   const token = ensureToken();
   const handlers = buildHandlers(wa);
 
-  if (fs.existsSync(SOCKET_PATH)) {
-    fs.rmSync(SOCKET_PATH);
-  }
-
   const server = net.createServer((socket) => {
     let buffer = "";
     socket.on("data", (chunk) => {
@@ -114,9 +117,24 @@ export function startIpcServer(wa: WhatsAppClient): net.Server {
     });
   });
 
-  server.listen(SOCKET_PATH, () => {
-    fs.chmodSync(SOCKET_PATH, 0o600);
-  });
+  if (IPC_MODE === "tcp") {
+    if (IPC_TCP_HOST === "0.0.0.0" || IPC_TCP_HOST === "::") {
+      console.warn(
+        `WARNING: WHATSAPP_MCP_DAEMON_HOST=${IPC_TCP_HOST} binds every interface. ` +
+          "Bind to an internal-only address (loopback or a private/docker-internal IP) — this port has no transport encryption, only the token."
+      );
+    }
+    server.listen(IPC_TCP_PORT, IPC_TCP_HOST, () => {
+      console.log(`IPC listening on tcp://${IPC_TCP_HOST}:${IPC_TCP_PORT} (token: ${TOKEN_PATH})`);
+    });
+  } else {
+    if (fs.existsSync(SOCKET_PATH)) {
+      fs.rmSync(SOCKET_PATH);
+    }
+    server.listen(SOCKET_PATH, () => {
+      fs.chmodSync(SOCKET_PATH, 0o600);
+    });
+  }
 
   return server;
 }
