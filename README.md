@@ -81,6 +81,34 @@ reachable, instead of auto-starting one. The auth token is the only guard on
 this port (no transport encryption), so treat it like a credential and keep
 it bound to an internal-only address.
 
+### MCP client transport modes
+
+By default an MCP client spawns this project's MCP server as a local child
+process and talks to it over stdio — this only works when the client and
+server run in the same container. To run the MCP server in its own
+container (separate from the agent container that calls it), switch it to
+an HTTP transport instead:
+
+| Env var | Where | Purpose |
+| --- | --- | --- |
+| `WHATSAPP_MCP_TRANSPORT` | mcp server | `"stdio"` (default) or `"http"`. |
+| `WHATSAPP_MCP_HTTP_PORT` | mcp server (http mode) | Port to listen on (default `8788`). Bound on `0.0.0.0` — this is expected; see below. |
+| `WHATSAPP_MCP_HTTP_TOKEN` | mcp server (http mode) | Required bearer token. The server refuses to start in http mode without it. |
+
+In http mode, every request must send `Authorization: Bearer <token>`; a
+missing or wrong token gets a 401. This token is the *only* access control
+on this port — once this process listens on a network port instead of
+being spawned locally, anyone who can reach it could otherwise call
+`list_chats`/`search_messages`/`get_messages` and read the owner's WhatsApp
+message history with no auth at all (still read-only — no send capability
+exists — but it would leak message contents to anyone on the network
+path). Treat `WHATSAPP_MCP_HTTP_TOKEN` like a credential, the same way as
+`WHATSAPP_MCP_DAEMON_TOKEN` above — they guard two different links and are
+not interchangeable. Binding on `0.0.0.0` is fine here: this port's whole
+job is to be reached from another container, and actual network exposure
+is controlled by the `docker run`/compose port mapping, not by the bind
+address.
+
 ## Setup
 
 ```bash
@@ -127,6 +155,68 @@ Example config block (adjust to your client's config format):
 
 The shim will auto-start the daemon on first tool call if it isn't already
 running.
+
+## Running in Docker
+
+A single multi-stage `Dockerfile` at the repo root builds both processes;
+which one runs is just which command you launch the container with. Build
+once, run it twice with different commands/env:
+
+```bash
+docker build -t whatsapp-mcp .
+
+# A private user-defined network so the two containers can reach each
+# other by name without publishing the daemon's IPC port to the host.
+docker network create whatsapp-net
+
+# Daemon container — holds the WhatsApp connection, owns data/.
+docker run -d --name whatsapp-daemon \
+  --network whatsapp-net \
+  -v "$(pwd)/data:/app/data" \
+  -e WHATSAPP_MCP_IPC_MODE=tcp \
+  -e WHATSAPP_MCP_DAEMON_HOST=0.0.0.0 \
+  whatsapp-mcp
+  # CMD defaults to: node dist/daemon/index.js
+  # WHATSAPP_MCP_DAEMON_HOST=0.0.0.0 makes the daemon log its usual
+  # "binds every interface" warning (see ipcServer.ts) — expected here:
+  # no -p was passed, so the port isn't reachable off whatsapp-net at all,
+  # and the per-request token still guards it either way.
+
+# MCP-server container — separate container, talks to the daemon over TCP
+# and to its own MCP client over HTTP.
+docker run -d --name whatsapp-mcp-server \
+  --network whatsapp-net \
+  -p 8788:8788 \
+  -e WHATSAPP_MCP_IPC_MODE=tcp \
+  -e WHATSAPP_MCP_DAEMON_HOST=whatsapp-daemon \
+  -e WHATSAPP_MCP_DAEMON_PORT=8787 \
+  -e WHATSAPP_MCP_DAEMON_TOKEN="$(cat data/daemon.token)" \
+  -e WHATSAPP_MCP_TRANSPORT=http \
+  -e WHATSAPP_MCP_HTTP_TOKEN=<choose-a-token> \
+  whatsapp-mcp node dist/mcp/index.js
+  # overrides CMD to run the mcp shim instead of the daemon
+```
+
+Notes:
+
+- `data/` (auth session, `messages.db`, `daemon.token`) must be a mounted
+  volume — the image never bakes it in (it's gitignored and
+  dockerignored). Only the daemon container needs it mounted; the
+  mcp-server container reaches the daemon over the network and never
+  touches the filesystem under `data/`.
+- Put the agent container that calls the mcp-server on `whatsapp-net` too
+  (or any network that can reach it) so it can register this as a remote
+  MCP server at `http://whatsapp-mcp-server:8788` with the
+  `WHATSAPP_MCP_HTTP_TOKEN` value as its bearer token. The `-p 8788:8788`
+  above is only needed if something outside Docker needs to reach it.
+- See "IPC transport modes" above for the daemon-link env vars
+  (`WHATSAPP_MCP_IPC_MODE`, `WHATSAPP_MCP_DAEMON_HOST`/`PORT`/`TOKEN`) and
+  "MCP client transport modes" above for the mcp-server's own HTTP env
+  vars (`WHATSAPP_MCP_TRANSPORT`, `WHATSAPP_MCP_HTTP_PORT`,
+  `WHATSAPP_MCP_HTTP_TOKEN`).
+- First-run pairing (the QR code step) still needs to happen against the
+  daemon container's logs — run `docker logs -f whatsapp-daemon` after
+  starting it the first time.
 
 ## Tools
 
