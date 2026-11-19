@@ -45,20 +45,41 @@ project is split into two processes:
 
 - **Daemon** (`src/daemon`) — a long-running resident process that holds the
   Baileys WebSocket connection, writes incoming messages to a local SQLite
-  database, and exposes a read-only RPC API over a Unix domain socket
-  (`data/daemon.sock`), guarded by a random per-install token
+  database, and exposes a read-only RPC API over IPC (Unix domain socket or
+  TCP, see below), guarded by a random per-install token
   (`data/daemon.token`, mode `0600`).
 - **MCP shim** (`src/mcp`) — a thin stdio MCP server. Each tool call connects
-  to the daemon's Unix socket, issues one read-only RPC call, and returns the
-  result. If the daemon isn't running yet, the shim auto-starts it
-  (`npm run daemon` equivalent) and waits for the socket to come up.
+  to the daemon over IPC, issues one read-only RPC call, and returns the
+  result. In the default same-container setup the shim auto-starts the
+  daemon (`npm run daemon` equivalent) if it isn't already running and waits
+  for the socket to come up.
 
 ```
-MCP client (Claude, etc.) --stdio--> mcp shim --unix socket + token--> daemon --websocket--> WhatsApp
-                                                                           |
-                                                                           v
-                                                                   SQLite (data/messages.db)
+MCP client (Claude, etc.) --stdio--> mcp shim --ipc + token--> daemon --websocket--> WhatsApp
+                                                                   |
+                                                                   v
+                                                           SQLite (data/messages.db)
 ```
+
+### IPC transport modes
+
+By default the daemon and the MCP shim run in the same container and talk
+over a Unix domain socket (`data/daemon.sock`, mode `0600`). They can instead
+run in **separate containers**, with the MCP shim reaching the daemon over
+TCP:
+
+| Env var | Where | Purpose |
+| --- | --- | --- |
+| `WHATSAPP_MCP_IPC_MODE` | both | `"unix"` (default) or `"tcp"`. |
+| `WHATSAPP_MCP_DAEMON_HOST` | both (tcp mode) | Host the daemon binds/the shim connects to. Must be an internal-only address (loopback or a private/docker-internal IP) — never a public interface. |
+| `WHATSAPP_MCP_DAEMON_PORT` | both (tcp mode) | Port (default `8787`). |
+| `WHATSAPP_MCP_DAEMON_TOKEN` | shim (tcp mode) | The daemon's auth token, injected directly since `data/daemon.token` won't be on the shim's filesystem in this mode. Read it from the daemon container's `data/daemon.token` and pass it as an env var when registering the MCP server. |
+
+In TCP mode the shim will not try to spawn the daemon itself (there's
+nowhere local to spawn it) — it fails with a clear error if the daemon isn't
+reachable, instead of auto-starting one. The auth token is the only guard on
+this port (no transport encryption), so treat it like a credential and keep
+it bound to an internal-only address.
 
 ## Setup
 
