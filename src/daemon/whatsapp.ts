@@ -9,6 +9,7 @@
  * anywhere else in this codebase — see README.md "No-send guarantee".
  */
 import fs from "node:fs";
+import path from "node:path";
 import {
   makeWASocket,
   useMultiFileAuthState,
@@ -20,8 +21,9 @@ import {
 } from "baileys";
 import { Boom } from "@hapi/boom";
 import qrcodeTerminal from "qrcode-terminal";
+import QRCode from "qrcode";
 import pino from "pino";
-import { AUTH_DIR } from "../common/paths.js";
+import { AUTH_DIR, DATA_DIR } from "../common/paths.js";
 import { insertMessage, upsertChat } from "./db.js";
 import type { LinkStatus } from "../common/ipcProtocol.js";
 
@@ -66,6 +68,10 @@ export class WhatsAppClient {
         this.qrPending = true;
         console.log("\nScan this QR code from WhatsApp > Linked Devices > Link a Device:\n");
         qrcodeTerminal.generate(qr, { small: true });
+        const qrPngPath = path.join(DATA_DIR, "latest-qr.png");
+        QRCode.toFile(qrPngPath, qr, { width: 512 }).catch((err) => {
+          logger.warn({ err }, "Failed to write QR PNG");
+        });
       }
 
       if (connection === "open") {
