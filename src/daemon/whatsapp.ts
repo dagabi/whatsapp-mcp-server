@@ -155,6 +155,11 @@ export class WhatsAppClient {
 
   private storeMessage(m: WAMessage): void {
     if (!m.key?.remoteJid || !m.key?.id) return;
+    // protocolMessage covers Baileys-internal signaling (history-sync
+    // notifications, app-state key shares, etc.) addressed to our own JID.
+    // It is never user-visible chat content, so storing it only pollutes
+    // the message store with empty-text, fromMe entries at connect time.
+    if (m.message?.protocolMessage) return;
     const chatId = m.key.remoteJid;
     const text = extractText(m);
     const timestamp = toUnixSeconds(m.messageTimestamp);
