@@ -159,8 +159,32 @@ running.
 ## Running in Docker
 
 A single multi-stage `Dockerfile` at the repo root builds both processes;
-which one runs is just which command you launch the container with. Build
-once, run it twice with different commands/env:
+which one runs is just which command you launch the container with.
+
+### Docker Compose (recommended for redeploys)
+
+`docker-compose.yml` wires up both containers (daemon + mcp-server) with the
+same settings as the manual `docker run` commands below:
+
+```bash
+cp .env.example .env
+# Fill in WHATSAPP_MCP_DAEMON_TOKEN (cat data/daemon.token, once the daemon
+# has run at least once) and WHATSAPP_MCP_HTTP_TOKEN (whatever value is
+# registered as this server's MCP client credential — keep it unchanged
+# across redeploys or every registered client breaks).
+docker compose up -d --build
+docker compose logs -f whatsapp-daemon   # first run only: scan the QR code
+```
+
+`.env` is gitignored — real tokens never get committed. `./data` is bind-
+mounted into the daemon only, same as in the manual setup, so the paired
+WhatsApp session and message history survive `docker compose up -d --build`
+redeploys. `docker compose restart whatsapp-mcp-server` picks up code
+changes without touching the daemon or its WhatsApp session at all.
+
+### Manual `docker run` (what Compose automates above)
+
+Build once, run it twice with different commands/env:
 
 ```bash
 docker build -t whatsapp-mcp .

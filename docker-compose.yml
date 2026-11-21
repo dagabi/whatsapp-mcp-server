@@ -1,0 +1,35 @@
+services:
+  whatsapp-daemon:
+    build: .
+    image: whatsapp-mcp
+    container_name: whatsapp-daemon
+    restart: unless-stopped
+    volumes:
+      - ./data:/app/data
+    environment:
+      WHATSAPP_MCP_IPC_MODE: tcp
+      WHATSAPP_MCP_DAEMON_HOST: 0.0.0.0
+    # First-run pairing: `docker compose logs -f whatsapp-daemon` and scan
+    # the QR code. The session persists under ./data, so this is a one-time
+    # step as long as the volume isn't wiped.
+
+  whatsapp-mcp-server:
+    build: .
+    image: whatsapp-mcp
+    container_name: whatsapp-mcp-server
+    restart: unless-stopped
+    command: node dist/mcp/index.js
+    depends_on:
+      - whatsapp-daemon
+    ports:
+      - "8788:8788"
+    environment:
+      WHATSAPP_MCP_IPC_MODE: tcp
+      WHATSAPP_MCP_DAEMON_HOST: whatsapp-daemon
+      WHATSAPP_MCP_DAEMON_PORT: 8787
+      WHATSAPP_MCP_DAEMON_TOKEN: ${WHATSAPP_MCP_DAEMON_TOKEN}
+      WHATSAPP_MCP_TRANSPORT: http
+      WHATSAPP_MCP_HTTP_TOKEN: ${WHATSAPP_MCP_HTTP_TOKEN}
+    # No volume here on purpose: the mcp-server never touches ./data, it
+    # only talks to whatsapp-daemon over the network (see README "IPC
+    # transport modes").
