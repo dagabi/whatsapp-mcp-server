@@ -13,6 +13,7 @@ import path from "node:path";
 import {
   makeWASocket,
   useMultiFileAuthState,
+  fetchLatestBaileysVersion,
   DisconnectReason,
   type WASocket,
   type WAMessage,
@@ -47,9 +48,17 @@ export class WhatsAppClient {
 
   private async connect(): Promise<void> {
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
+    // The library's baked-in default WA Web version goes stale as WhatsApp
+    // rolls out server-side changes, and pairing against a stale version is
+    // a common cause of "Couldn't link device, try again later" even when
+    // the QR scan itself succeeds. Always fetch the current version instead
+    // of relying on the package default.
+    const { version, isLatest } = await fetchLatestBaileysVersion();
+    logger.info({ version, isLatest }, "Using WA Web version");
 
     const sock = makeWASocket({
       auth: state,
+      version,
       logger: logger.child({ mod: "baileys" }),
       // Read-only: we intentionally do not set markOnlineOnConnect behavior
       // beyond the library default, and we never mark chats/messages as
