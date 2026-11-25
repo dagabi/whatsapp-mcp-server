@@ -28,6 +28,11 @@ db.exec(`
     FOREIGN KEY (chat_id) REFERENCES chats(id)
   );
 
+  CREATE TABLE IF NOT EXISTS contacts (
+    jid TEXT PRIMARY KEY,
+    name TEXT NOT NULL
+  );
+
   CREATE INDEX IF NOT EXISTS idx_messages_chat_ts ON messages (chat_id, timestamp);
   CREATE INDEX IF NOT EXISTS idx_messages_ts ON messages (timestamp);
 
@@ -76,6 +81,16 @@ export function upsertChat(input: {
   });
 }
 
+const upsertContactStmt = db.prepare(`
+  INSERT INTO contacts (jid, name) VALUES (@jid, @name)
+  ON CONFLICT(jid) DO UPDATE SET name = excluded.name
+`);
+
+/** Remember a display name for a JID (phone-number JID or @lid alike). */
+export function upsertContact(jid: string, name: string): void {
+  upsertContactStmt.run({ jid, name });
+}
+
 const insertMessageStmt = db.prepare(`
   INSERT INTO messages (id, chat_id, sender, sender_name, from_me, timestamp, text)
   VALUES (@id, @chatId, @sender, @senderName, @fromMe, @timestamp, @text)
@@ -120,9 +135,11 @@ export function countMessages(): number {
 export function listChats(limit = 200): ChatSummary[] {
   const rows = db
     .prepare(
-      `SELECT id, name, is_group AS isGroup, last_message_ts AS lastMessageTimestamp
-       FROM chats
-       ORDER BY COALESCE(last_message_ts, 0) DESC
+      `SELECT c.id AS id, COALESCE(ct.name, c.name) AS name, c.is_group AS isGroup,
+              c.last_message_ts AS lastMessageTimestamp
+       FROM chats c
+       LEFT JOIN contacts ct ON ct.jid = c.id
+       ORDER BY COALESCE(c.last_message_ts, 0) DESC
        LIMIT @limit`
     )
     .all({ limit }) as Array<{
@@ -183,10 +200,12 @@ export function getMessages(params: {
   }
 
   const sql = `
-    SELECT m.id AS id, m.chat_id AS chatId, c.name AS chatName, m.sender AS sender,
-           m.sender_name AS senderName, m.from_me AS fromMe, m.timestamp AS timestamp, m.text AS text
+    SELECT m.id AS id, m.chat_id AS chatId, COALESCE(cct.name, c.name) AS chatName, m.sender AS sender,
+           COALESCE(sct.name, m.sender_name) AS senderName, m.from_me AS fromMe, m.timestamp AS timestamp, m.text AS text
     FROM messages m
     LEFT JOIN chats c ON c.id = m.chat_id
+    LEFT JOIN contacts cct ON cct.jid = m.chat_id
+    LEFT JOIN contacts sct ON sct.jid = m.sender
     WHERE ${clauses.join(" AND ")}
     ORDER BY m.timestamp DESC
     LIMIT @limit
@@ -217,11 +236,13 @@ export function searchMessages(params: {
   }
 
   const sql = `
-    SELECT m.id AS id, m.chat_id AS chatId, c.name AS chatName, m.sender AS sender,
-           m.sender_name AS senderName, m.from_me AS fromMe, m.timestamp AS timestamp, m.text AS text
+    SELECT m.id AS id, m.chat_id AS chatId, COALESCE(cct.name, c.name) AS chatName, m.sender AS sender,
+           COALESCE(sct.name, m.sender_name) AS senderName, m.from_me AS fromMe, m.timestamp AS timestamp, m.text AS text
     FROM messages_fts
     JOIN messages m ON m.rowid = messages_fts.rowid
     LEFT JOIN chats c ON c.id = m.chat_id
+    LEFT JOIN contacts cct ON cct.jid = m.chat_id
+    LEFT JOIN contacts sct ON sct.jid = m.sender
     WHERE ${clauses.join(" AND ")}
     ORDER BY m.timestamp DESC
     LIMIT @limit
