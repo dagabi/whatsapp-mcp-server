@@ -222,9 +222,56 @@ export function searchMessages(params: {
   limit?: number;
 }): StoredMessage[] {
   const limit = Math.min(Math.max(params.limit ?? 50, 1), 500);
-  const clauses: string[] = ["messages_fts MATCH @query"];
-  const bind: Record<string, unknown> = { query: sanitizeFtsQuery(params.query), limit };
 
+  const ftsClauses: string[] = ["messages_fts MATCH @query"];
+  const ftsBind: Record<string, unknown> = { query: sanitizeFtsQuery(params.query), limit };
+  applyFilters(ftsClauses, ftsBind, params);
+
+  const ftsSql = `
+    SELECT m.id AS id, m.chat_id AS chatId, COALESCE(cct.name, c.name) AS chatName, m.sender AS sender,
+           COALESCE(sct.name, m.sender_name) AS senderName, m.from_me AS fromMe, m.timestamp AS timestamp, m.text AS text
+    FROM messages_fts
+    JOIN messages m ON m.rowid = messages_fts.rowid
+    LEFT JOIN chats c ON c.id = m.chat_id
+    LEFT JOIN contacts cct ON cct.jid = m.chat_id
+    LEFT JOIN contacts sct ON sct.jid = m.sender
+    WHERE ${ftsClauses.join(" AND ")}
+    ORDER BY m.timestamp DESC
+    LIMIT @limit
+  `;
+
+  const rows = db.prepare(ftsSql).all(ftsBind) as any[];
+  if (rows.length > 0) return rows.map(rowToMessage);
+
+  // FTS5's default tokenizer does exact-token matching: it has no concept of
+  // Hebrew prefixes (ה-/ו-/ב-/ל-/מ-) or verb conjugation, so a query like
+  // "עץ" or "לכרות" will not match text containing "העץ" or "שכרת". Fall
+  // back to a plain substring scan so those common misses still surface.
+  const likeClauses: string[] = ["m.text LIKE @likeQuery"];
+  const likeBind: Record<string, unknown> = { likeQuery: `%${params.query.trim()}%`, limit };
+  applyFilters(likeClauses, likeBind, params);
+
+  const likeSql = `
+    SELECT m.id AS id, m.chat_id AS chatId, COALESCE(cct.name, c.name) AS chatName, m.sender AS sender,
+           COALESCE(sct.name, m.sender_name) AS senderName, m.from_me AS fromMe, m.timestamp AS timestamp, m.text AS text
+    FROM messages m
+    LEFT JOIN chats c ON c.id = m.chat_id
+    LEFT JOIN contacts cct ON cct.jid = m.chat_id
+    LEFT JOIN contacts sct ON sct.jid = m.sender
+    WHERE ${likeClauses.join(" AND ")}
+    ORDER BY m.timestamp DESC
+    LIMIT @limit
+  `;
+
+  const likeRows = db.prepare(likeSql).all(likeBind) as any[];
+  return likeRows.map(rowToMessage);
+}
+
+function applyFilters(
+  clauses: string[],
+  bind: Record<string, unknown>,
+  params: { chatId?: string | null; sender?: string | null }
+): void {
   if (params.chatId) {
     clauses.push("m.chat_id = @chatId");
     bind.chatId = params.chatId;
@@ -234,22 +281,6 @@ export function searchMessages(params: {
     bind.sender = params.sender;
     bind.senderLike = `%${params.sender}%`;
   }
-
-  const sql = `
-    SELECT m.id AS id, m.chat_id AS chatId, COALESCE(cct.name, c.name) AS chatName, m.sender AS sender,
-           COALESCE(sct.name, m.sender_name) AS senderName, m.from_me AS fromMe, m.timestamp AS timestamp, m.text AS text
-    FROM messages_fts
-    JOIN messages m ON m.rowid = messages_fts.rowid
-    LEFT JOIN chats c ON c.id = m.chat_id
-    LEFT JOIN contacts cct ON cct.jid = m.chat_id
-    LEFT JOIN contacts sct ON sct.jid = m.sender
-    WHERE ${clauses.join(" AND ")}
-    ORDER BY m.timestamp DESC
-    LIMIT @limit
-  `;
-
-  const rows = db.prepare(sql).all(bind) as any[];
-  return rows.map(rowToMessage);
 }
 
 // FTS5 query syntax treats certain characters specially; quote the whole
